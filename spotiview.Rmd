@@ -1,0 +1,627 @@
+---
+title: "Spotiview"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    social: menu
+    source_code: embed
+    runtime: shiny
+    theme:
+      bg: "#d8f3dc"             # Background
+      fg: "#1b4332"             # Font
+      primary: "#1b4332"        # Banner
+      base_font:
+        google: Prompt
+      code_font:
+        google: JetBrains Mono
+    vertical_layout: scroll
+---
+
+```{r setup, include=FALSE}
+rm(list = ls())
+
+# Loading
+library(flexdashboard)  # For dashboard itself
+library(thematic)       # For theming static images such as ggplot
+library(ggplot2)        # Creating graphs
+library(shiny)          # Interactive Shiny elements
+library(tidyverse)      # Data wrangling
+library(plotly)         # Interactive plots
+library(stringr)        # Text manipulation
+
+# Allow theming of static images
+thematic::thematic_rmd()
+
+# Loading data
+path <- "https://raw.githubusercontent.com/rjjanse/spotiview/main/dat.spotify"
+load(url(path))
+
+```
+
+# Genres
+
+##  {.sidebar}
+
+```{r}
+# Input selector
+selectInput("playlist.genr", label = h3("Playlist"),
+            choices = unique((dat.spotify %>% filter(folder == "Genres") %>% arrange(playlist))[["playlist"]]),
+            selected = 1)
+
+# Store selected playlist
+pl.genr <- reactive(input$playlist.genr)
+
+# Render text for selected playlist
+renderText({
+    # Save data from only selected playlist
+    dat.playlist <- filter(dat.spotify, playlist == pl.genr())
+    
+    # Store date of first released song
+    date.track.first <- min(dat.playlist[["album_release"]], na.rm = TRUE)
+    
+    # Store date of last released song
+    date.track.last <- max(dat.playlist[["album_release"]], na.rm = TRUE)
+    
+    # Store date of earliest added song
+    date.added <- min(dat.playlist[["added"]], na.rm = TRUE)
+    
+    # Store number of tracks
+    n.tracks <- nrow(dat.playlist)
+    
+    # Store number of albums
+    n.albums <- length(unique(dat.playlist[["album"]]))
+    
+    # Write text
+    paste0("The playlist ", pl.genr(), " was created on ", date.added, " and contains ", n.tracks, " tracks from ", n.albums, 
+           " different albums. The oldest track is from ", date.track.first, " and the oldest track is from ", date.track.last, 
+           ".")
+})
+
+# Render empty line
+renderText({
+    paste0("-")
+})
+
+# Define theme
+theme_spotiview <- function(){
+    theme(plot.title = element_text(hjust = 0.5, face = "bold", colour = "#081C15"),
+          panel.grid = element_blank(),
+          axis.line.x = element_line(colour = "#081C15"),
+          axis.line.y = element_line(colour = "#081C15")
+          )
+}
+
+```
+
+ 
+Spotiview gives an overview of the Spotify playlists of Roemer Janse. The data was last derived and updated on 2022-09-15.
+
+------------------------------------------------------------------------
+
+## Row {data-height = 650}
+```{r}
+# Track adding over time
+renderPlot({
+    # Filter data and calculate cumulative counts
+    dat.plot <- filter(dat.spotify, playlist == pl.genr()) %>% dplyr::select(added) %>% filter(!is.na(added)) %>% arrange(added) %>% group_by(added) %>% 
+        mutate(count = max(row_number())) %>% slice(1L) %>% ungroup() %>% mutate(`Cumulative count` = cumsum(count), Added = added)
+    
+    # Create and call plot
+    (p <- ggplot(data = dat.plot, aes(x = Added, y = `Cumulative count`)) +
+        geom_smooth(method = "loess", formula = y ~ x, colour = "#74C69D", fill = "#95D5B2") + geom_point(colour = "#081C15") + 
+        ggtitle("Cumulative count of tracks added over time") + xlab("Calendar time") + ylab("Cumulative count") +
+        theme_spotiview() + theme(axis.line = element_line(colour = "#081C15"))
+    )
+})
+
+```
+
+## Row {data-height = 650}
+```{r}
+# Bar chart of artists
+renderPlotly({
+    # Filter data 
+    dat.plot <- filter(dat.spotify, playlist == pl.genr()) %>% dplyr::select(artist) %>% filter(!is.na(artist))
+    
+    # Determine maximum amount of artists on a single track
+    artist_max <- max(lengths(regmatches(dat.plot[["artist"]], gregexpr(",", dat.plot[["artist"]])))) + 1
+    
+    # Separate artist column into new columns of maximum amount of artists
+    suppressWarnings(dat.plot.temp <- separate(dat.plot, artist, into = c(paste0("artist", 1:artist_max)), sep = ", "))
+    
+    # Change multiple artist columns to single row
+    for(c in 1:artist_max){
+        # First plot is base
+        if(c == 1){
+            dat.plot <- dat.plot.temp[, 1] %>% rename(artist = 1)
+        }
+        
+        # Bind other columns
+        else{
+            dat.plot <- rbind(dat.plot, dat.plot.temp[, c] %>% rename(artist = 1))
+        }
+        
+        # Remove NAs
+        dat.plot <- filter(dat.plot, !is.na(artist)) %>% arrange(artist)
+    }
+    
+    # Get count per artist
+    dat.plot.temp <- dat.plot %>% arrange(artist) %>% group_by(artist) %>% mutate(count = max(row_number())) %>% slice(1L) %>% ungroup() %>% 
+        arrange(count, desc(artist)) %>% mutate(order = 1:length(unique(dat.plot[["artist"]])))
+    
+    # Reorder data based on artist factors after determining order from counts
+    dat.plot <- dat.plot %>% left_join(dat.plot.temp, "artist") %>% mutate(artist = fct_reorder(artist, order)) %>% arrange(artist)
+    
+    # Create and call plot
+    (p <- ggplot(data = dat.plot, aes(x = artist)) + geom_bar(colour = "#081C15", fill = "#95D5B2", width = 0.5) + coord_flip() +
+            scale_y_continuous(expand = c(0, 0), breaks = 0:max(dat.plot[["count"]])) +
+            ggtitle("Artist representation") + xlab("") + ylab("Count") +
+            theme_spotiview()
+    )
+    
+    # Call plot with plotly
+    ggplotly(p)
+})
+    
+```
+
+
+## Row {data-height = 650}
+```{r}
+# Histogram of track releases
+renderPlot({
+    # Filter data
+    dat.plot <- filter(dat.spotify, playlist == pl.genr()) %>% dplyr::select(album_release) %>% filter(!is.na(album_release))
+    
+    # Create and call plot
+    (p <- ggplot(data = dat.plot, aes(x = album_release)) + geom_histogram(colour = "#081C15", fill = "#95D5B2", binwidth = 365) +
+            scale_y_continuous(expand = c(0, 0)) +  ggtitle("Distribution of years of track release") + xlab("Year") + ylab("Count") +
+            theme_spotiview() + theme(axis.line.y.left = element_blank(), panel.background = element_blank())
+    )
+})
+    
+```
+
+```{r}
+# Histogram of track duration
+renderPlot({
+    # Filter data and convert track duration from milliseconds to seconds
+    dat.plot <- filter(dat.spotify, playlist == pl.genr()) %>% dplyr::select(track_duration) %>% filter(!is.na(track_duration)) %>%
+        mutate(track_duration = track_duration / 1000)
+   
+    # Get max track duration
+    max.duration <- max(dat.plot[["track_duration"]])
+    
+    # Create plot
+    p <- ggplot(data = dat.plot, aes(x = track_duration)) + geom_histogram(colour = "#081C15", fill = "#95D5B2", binwidth = 10) +
+        scale_y_continuous(expand = c(0, 0)) + scale_x_continuous(breaks = seq(0, max.duration, by = 60)) +
+        ggtitle("Distribution of track duration") + xlab("Duration (seconds)") + ylab("Count") +
+        theme_spotiview() + theme(axis.line.y.left = element_blank(), panel.background = element_blank())
+    
+    # Add vertical line for each minute until max duration
+    for(minute in seq(60, max.duration, by = 60)){
+        # Add vertical line
+        p <- p + geom_vline(xintercept = minute, colour = "#081C15", linetype = "dashed")
+    }
+    
+    # Call plot
+    p
+})
+    
+```
+
+```{r}
+# Balance of explicit vs. non-explicit
+renderPlot({
+    # Filter data 
+    dat.plot <- filter(dat.spotify, playlist == pl.genr()) %>% dplyr::select(explicit)
+     
+    # Get proportions
+    dat.plot <- table(dat.plot[["explicit"]]) %>% as.data.frame() %>% mutate(Var1 = ifelse(Var1 == TRUE, "Yes", "No"), group = 1)
+     
+    # Create and call plot
+    (p <- ggplot(data = dat.plot, aes(x = group, y = Freq, fill = Var1)) + geom_bar(colour = "#081C15", position = "fill", stat = "identity") +
+            scale_fill_manual(values = c("#95D5B2", "#74C69D")) +
+            scale_y_continuous(expand = c(0, 0)) +
+            scale_x_continuous(expand = c(0, 0)) +
+            ggtitle("Explicit content") + xlab("") + ylab("Proportion") +
+            theme_spotiview() + theme(axis.line.x.bottom = element_blank(),
+                                      axis.text.x.bottom = element_blank(),
+                                      axis.ticks.x.bottom = element_blank(),
+                                      legend.position = "bottom",
+                                      legend.title = element_blank())
+     )
+})
+
+```
+
+# Melodic
+
+##  {.sidebar}
+
+```{r}
+# Input selector
+selectInput("playlist.melo", label = h3("Playlist"),
+            choices = unique((dat.spotify %>% filter(folder == "Melodic") %>% arrange(playlist))[["playlist"]]),
+            selected = 1)
+
+# Store selected playlist
+pl.melo <- reactive(input$playlist.melo)
+
+# Render text for selected playlist
+renderText({
+    # Save data from only selected playlist
+    dat.playlist <- filter(dat.spotify, playlist == pl.melo())
+    
+    # Store date of first released song
+    date.track.first <- min(dat.playlist[["album_release"]], na.rm = TRUE)
+    
+    # Store date of last released song
+    date.track.last <- max(dat.playlist[["album_release"]], na.rm = TRUE)
+    
+    # Store date of earliest added song
+    date.added <- min(dat.playlist[["added"]], na.rm = TRUE)
+    
+    # Store number of tracks
+    n.tracks <- nrow(dat.playlist)
+    
+    # Store number of albums
+    n.albums <- length(unique(dat.playlist[["album"]]))
+    
+    # Write text
+    paste0("The playlist ", pl.melo(), " was created on ", date.added, " and contains ", n.tracks, " tracks from ", n.albums, 
+           " different albums. The oldest track is from ", date.track.first, " and the oldest track is from ", date.track.last, 
+           ".")
+})
+
+# Render empty line
+renderText({
+    paste0("-")
+})
+
+# Define theme
+theme_spotiview <- function(){
+    theme(plot.title = element_text(hjust = 0.5, face = "bold", colour = "#081C15"),
+          panel.grid = element_blank(),
+          axis.line.x = element_line(colour = "#081C15"),
+          axis.line.y = element_line(colour = "#081C15")
+          )
+}
+
+```
+
+ 
+Spotiview gives an overview of the Spotify playlists of Roemer Janse. The data was last derived and updated on 2022-09-15.
+
+------------------------------------------------------------------------
+
+## Row {data-height = 650}
+```{r}
+# Track adding over time
+renderPlot({
+    # Filter data and calculate cumulative counts
+    dat.plot <- filter(dat.spotify, playlist == pl.melo()) %>% dplyr::select(added) %>% filter(!is.na(added)) %>% arrange(added) %>% group_by(added) %>% 
+        mutate(count = max(row_number())) %>% slice(1L) %>% ungroup() %>% mutate(`Cumulative count` = cumsum(count), Added = added)
+    
+    # Create and call plot
+    (p <- ggplot(data = dat.plot, aes(x = Added, y = `Cumulative count`)) +
+        geom_smooth(method = "loess", formula = y ~ x, colour = "#74C69D", fill = "#95D5B2") + geom_point(colour = "#081C15") + 
+        ggtitle("Cumulative count of tracks added over time") + xlab("Calendar time") + ylab("Cumulative count") +
+        theme_spotiview() + theme(axis.line = element_line(colour = "#081C15"))
+    )
+})
+
+```
+
+## Row {data-height = 650}
+```{r}
+# Bar chart of artists
+renderPlotly({
+    # Filter data 
+    dat.plot <- filter(dat.spotify, playlist == pl.melo()) %>% dplyr::select(artist) %>% filter(!is.na(artist))
+    
+    # Determine maximum amount of artists on a single track
+    artist_max <- max(lengths(regmatches(dat.plot[["artist"]], gregexpr(",", dat.plot[["artist"]])))) + 1
+    
+    # Separate artist column into new columns of maximum amount of artists
+    suppressWarnings(dat.plot.temp <- separate(dat.plot, artist, into = c(paste0("artist", 1:artist_max)), sep = ", "))
+    
+    # Change multiple artist columns to single row
+    for(c in 1:artist_max){
+        # First plot is base
+        if(c == 1){
+            dat.plot <- dat.plot.temp[, 1] %>% rename(artist = 1)
+        }
+        
+        # Bind other columns
+        else{
+            dat.plot <- rbind(dat.plot, dat.plot.temp[, c] %>% rename(artist = 1))
+        }
+        
+        # Remove NAs
+        dat.plot <- filter(dat.plot, !is.na(artist)) %>% arrange(artist)
+    }
+    
+    # Get count per artist
+    dat.plot.temp <- dat.plot %>% arrange(artist) %>% group_by(artist) %>% mutate(count = max(row_number())) %>% slice(1L) %>% ungroup() %>% 
+        arrange(count, desc(artist)) %>% mutate(order = 1:length(unique(dat.plot[["artist"]])))
+    
+    # Reorder data based on artist factors after determining order from counts
+    dat.plot <- dat.plot %>% left_join(dat.plot.temp, "artist") %>% mutate(artist = fct_reorder(artist, order)) %>% arrange(artist)
+    
+    # Create and call plot
+    (p <- ggplot(data = dat.plot, aes(x = artist)) + geom_bar(colour = "#081C15", fill = "#95D5B2", width = 0.5) + coord_flip() +
+            scale_y_continuous(expand = c(0, 0), breaks = 0:max(dat.plot[["count"]])) +
+            ggtitle("Artist representation") + xlab("") + ylab("Count") +
+            theme_spotiview()
+    )
+    
+    # Call plot with plotly
+    ggplotly(p)
+})
+    
+```
+
+
+## Row {data-height = 650}
+```{r}
+# Histogram of track releases
+renderPlot({
+    # Filter data
+    dat.plot <- filter(dat.spotify, playlist == pl.melo()) %>% dplyr::select(album_release) %>% filter(!is.na(album_release))
+    
+    # Create and call plot
+    (p <- ggplot(data = dat.plot, aes(x = album_release)) + geom_histogram(colour = "#081C15", fill = "#95D5B2", binwidth = 365) +
+            scale_y_continuous(expand = c(0, 0)) +  ggtitle("Distribution of years of track release") + xlab("Year") + ylab("Count") +
+            theme_spotiview() + theme(axis.line.y.left = element_blank(), panel.background = element_blank())
+    )
+})
+    
+```
+
+```{r}
+# Histogram of track duration
+renderPlot({
+    # Filter data and convert track duration from milliseconds to seconds
+    dat.plot <- filter(dat.spotify, playlist == pl.melo()) %>% dplyr::select(track_duration) %>% filter(!is.na(track_duration)) %>%
+        mutate(track_duration = track_duration / 1000)
+   
+    # Get max track duration
+    max.duration <- max(dat.plot[["track_duration"]])
+    
+    # Create plot
+    p <- ggplot(data = dat.plot, aes(x = track_duration)) + geom_histogram(colour = "#081C15", fill = "#95D5B2", binwidth = 10) +
+        scale_y_continuous(expand = c(0, 0)) + scale_x_continuous(breaks = seq(0, max.duration, by = 60)) +
+        ggtitle("Distribution of track duration") + xlab("Duration (seconds)") + ylab("Count") +
+        theme_spotiview() + theme(axis.line.y.left = element_blank(), panel.background = element_blank())
+    
+    # Add vertical line for each minute until max duration
+    for(minute in seq(60, max.duration, by = 60)){
+        # Add vertical line
+        p <- p + geom_vline(xintercept = minute, colour = "#081C15", linetype = "dashed")
+    }
+    
+    # Call plot
+    p
+})
+    
+```
+
+```{r}
+# Balance of explicit vs. non-explicit
+renderPlot({
+    # Filter data 
+    dat.plot <- filter(dat.spotify, playlist == pl.melo()) %>% dplyr::select(explicit)
+     
+    # Get proportions
+    dat.plot <- table(dat.plot[["explicit"]]) %>% as.data.frame() %>% mutate(Var1 = ifelse(Var1 == TRUE, "Yes", "No"), group = 1)
+     
+    # Create and call plot
+    (p <- ggplot(data = dat.plot, aes(x = group, y = Freq, fill = Var1)) + geom_bar(colour = "#081C15", position = "fill", stat = "identity") +
+            scale_fill_manual(values = c("#95D5B2", "#74C69D")) +
+            scale_y_continuous(expand = c(0, 0)) +
+            scale_x_continuous(expand = c(0, 0)) +
+            ggtitle("Explicit content") + xlab("") + ylab("Proportion") +
+            theme_spotiview() + theme(axis.line.x.bottom = element_blank(),
+                                      axis.text.x.bottom = element_blank(),
+                                      axis.ticks.x.bottom = element_blank(),
+                                      legend.position = "bottom",
+                                      legend.title = element_blank())
+     )
+})
+
+```
+
+# Miscellaneous
+
+##  {.sidebar}
+
+```{r}
+# Input selector
+selectInput("playlist.misc", label = h3("Playlist"),
+            choices = unique((dat.spotify %>% filter(folder == "Genres") %>% arrange(playlist))[["playlist"]]),
+            selected = 1)
+
+# Store selected playlist
+pl.misc <- reactive(input$playlist.misc)
+
+# Render text for selected playlist
+renderText({
+    # Save data from only selected playlist
+    dat.playlist <- filter(dat.spotify, playlist == pl.misc())
+    
+    # Store date of earliest released song
+    date.track <- min(dat.playlist[["album_release"]], na.rm = TRUE)
+    
+    # Store date of earliest added song
+    date.added <- min(dat.playlist[["added"]], na.rm = TRUE)
+    
+    # Store number of tracks
+    n.tracks <- nrow(dat.playlist)
+    
+    # Store number of albums
+    n.albums <- length(unique(dat.playlist[["album"]]))
+    
+    # Write text
+    paste0("The playlist ", pl.misc(), " was created on ", date.added, " and contains ", n.tracks, " tracks from ", n.albums, 
+           " different albums. The oldest track is from ", date.track.first, " and the oldest track is from ", date.track.last, 
+           ".")
+})
+
+# Render empty line
+renderText({
+    paste0("-")
+})
+
+# Define theme
+theme_spotiview <- function(){
+    theme(plot.title = element_text(hjust = 0.5, face = "bold", colour = "#081C15"),
+          panel.grid = element_blank(),
+          axis.line.x = element_line(colour = "#081C15"),
+          axis.line.y = element_line(colour = "#081C15")
+          )
+}
+
+```
+
+ 
+Spotiview gives an overview of the Spotify playlists of Roemer Janse. The data was last derived and updated on 2022-09-15.
+
+------------------------------------------------------------------------
+
+## Row {data-height = 650}
+```{r}
+# Track adding over time
+renderPlot({
+    # Filter data and calculate cumulative counts
+    dat.plot <- filter(dat.spotify, playlist == pl.misc()) %>% dplyr::select(added) %>% filter(!is.na(added)) %>% arrange(added) %>% 
+        group_by(added) %>% mutate(count = max(row_number())) %>% slice(1L) %>% ungroup() %>% mutate(`Cumulative count` = cumsum(count), Added = added)
+    
+    # Create and call plot
+    (p <- ggplot(data = dat.plot, aes(x = Added, y = `Cumulative count`)) +
+        geom_smooth(method = "loess", formula = y ~ x, colour = "#74C69D", fill = "#95D5B2") + geom_point(colour = "#081C15") + 
+        ggtitle("Cumulative count of tracks added over time") + xlab("Calendar time") + ylab("Cumulative count") +
+        theme_spotiview() + theme(axis.line = element_line(colour = "#081C15"))
+    )
+})
+
+```
+
+## Row {data-height = 650}
+```{r}
+# Bar chart of artists
+renderPlotly({
+    # Filter data 
+    dat.plot <- filter(dat.spotify, playlist == pl.misc()) %>% dplyr::select(artist) %>% filter(!is.na(artist))
+    
+    # Determine maximum amount of artists on a single track
+    artist_max <- max(lengths(regmatches(dat.plot[["artist"]], gregexpr(",", dat.plot[["artist"]])))) + 1
+    
+    # Separate artist column into new columns of maximum amount of artists
+    suppressWarnings(dat.plot.temp <- separate(dat.plot, artist, into = c(paste0("artist", 1:artist_max)), sep = ", "))
+    
+    # Change multiple artist columns to single row
+    for(c in 1:artist_max){
+        # First plot is base
+        if(c == 1){
+            dat.plot <- dat.plot.temp[, 1] %>% rename(artist = 1)
+        }
+        
+        # Bind other columns
+        else{
+            dat.plot <- rbind(dat.plot, dat.plot.temp[, c] %>% rename(artist = 1))
+        }
+        
+        # Remove NAs
+        dat.plot <- filter(dat.plot, !is.na(artist)) %>% arrange(artist)
+    }
+    
+    # Get count per artist
+    dat.plot.temp <- dat.plot %>% arrange(artist) %>% group_by(artist) %>% mutate(count = max(row_number())) %>% slice(1L) %>% ungroup() %>% 
+        arrange(count, desc(artist)) %>% mutate(order = 1:length(unique(dat.plot[["artist"]])))
+    
+    # Reorder data based on artist factors after determining order from counts
+    dat.plot <- dat.plot %>% left_join(dat.plot.temp, "artist") %>% mutate(artist = fct_reorder(artist, order)) %>% arrange(artist)
+    
+    # Create and call plot
+    (p <- ggplot(data = dat.plot, aes(x = artist)) + geom_bar(colour = "#081C15", fill = "#95D5B2", width = 0.5) + coord_flip() +
+            scale_y_continuous(expand = c(0, 0), breaks = 0:max(dat.plot[["count"]])) +
+            ggtitle("Artist representation") + xlab("") + ylab("Count") +
+            theme_spotiview()
+    )
+    
+    # Call plot with plotly
+    ggplotly(p)
+})
+    
+```
+
+
+## Row {data-height = 650}
+```{r}
+# Histogram of track releases
+renderPlot({
+    # Filter data
+    dat.plot <- filter(dat.spotify, playlist == pl.misc()) %>% dplyr::select(album_release) %>% filter(!is.na(album_release))
+    
+    # Create and call plot
+    (p <- ggplot(data = dat.plot, aes(x = album_release)) + geom_histogram(colour = "#081C15", fill = "#95D5B2", binwidth = 365) +
+            scale_y_continuous(expand = c(0, 0)) +  ggtitle("Distribution of years of track release") + xlab("Year") + ylab("Count") +
+            theme_spotiview() + theme(axis.line.y.left = element_blank(), panel.background = element_blank())
+    )
+})
+    
+```
+
+```{r}
+# Histogram of track duration
+renderPlot({
+    # Filter data and convert track duration from milliseconds to seconds
+    dat.plot <- filter(dat.spotify, playlist == pl.misc()) %>% dplyr::select(track_duration) %>% filter(!is.na(track_duration)) %>%
+        mutate(track_duration = track_duration / 1000)
+   
+    # Get max track duration
+    max.duration <- max(dat.plot[["track_duration"]])
+    
+    # Create plot
+    p <- ggplot(data = dat.plot, aes(x = track_duration)) + geom_histogram(colour = "#081C15", fill = "#95D5B2", binwidth = 10) +
+        scale_y_continuous(expand = c(0, 0)) + scale_x_continuous(breaks = seq(0, max.duration, by = 60)) +
+        ggtitle("Distribution of track duration") + xlab("Duration (seconds)") + ylab("Count") +
+        theme_spotiview() + theme(axis.line.y.left = element_blank(), panel.background = element_blank())
+    
+    # Add vertical line for each minute until max duration
+    for(minute in seq(60, max.duration, by = 60)){
+        # Add vertical line
+        p <- p + geom_vline(xintercept = minute, colour = "#081C15", linetype = "dashed")
+    }
+    
+    # Call plot
+    p
+})
+    
+```
+
+```{r}
+# Balance of explicit vs. non-explicit
+renderPlot({
+    # Filter data 
+    dat.plot <- filter(dat.spotify, playlist == pl.misc()) %>% dplyr::select(explicit)
+     
+    # Get proportions
+    dat.plot <- table(dat.plot[["explicit"]]) %>% as.data.frame() %>% mutate(Var1 = ifelse(Var1 == TRUE, "Yes", "No"), group = 1)
+     
+    # Create and call plot
+    (p <- ggplot(data = dat.plot, aes(x = group, y = Freq, fill = Var1)) + geom_bar(colour = "#081C15", position = "fill", stat = "identity") +
+            scale_fill_manual(values = c("#95D5B2", "#74C69D")) +
+            scale_y_continuous(expand = c(0, 0)) +
+            scale_x_continuous(expand = c(0, 0)) +
+            ggtitle("Explicit content") + xlab("") + ylab("Proportion") +
+            theme_spotiview() + theme(axis.line.x.bottom = element_blank(),
+                                      axis.text.x.bottom = element_blank(),
+                                      axis.ticks.x.bottom = element_blank(),
+                                      legend.position = "bottom",
+                                      legend.title = element_blank())
+     )
+})
+
+```
