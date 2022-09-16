@@ -73,7 +73,7 @@ renderText({
     
     # Write text
     paste0("The playlist ", pl.genr(), " was created on ", date.added, " and contains ", n.tracks, " tracks from ", n.albums, 
-           " different albums. The oldest track is from ", date.track.first, " and the oldest track is from ", date.track.last, 
+           " different albums. The oldest track is from ", date.track.first, " and the newest track is from ", date.track.last, 
            ".")
 })
 
@@ -270,7 +270,7 @@ renderText({
     
     # Write text
     paste0("The playlist ", pl.melo(), " was created on ", date.added, " and contains ", n.tracks, " tracks from ", n.albums, 
-           " different albums. The oldest track is from ", date.track.first, " and the oldest track is from ", date.track.last, 
+           " different albums. The oldest track is from ", date.track.first, " and the newest track is from ", date.track.last, 
            ".")
 })
 
@@ -464,7 +464,7 @@ renderText({
     
     # Write text
     paste0("The playlist ", pl.misc(), " was created on ", date.added, " and contains ", n.tracks, " tracks from ", n.albums, 
-           " different albums. The oldest track is from ", date.track.first, " and the oldest track is from ", date.track.last, 
+           " different albums. The oldest track is from ", date.track.first, " and the newest track is from ", date.track.last, 
            ".")
 })
 
